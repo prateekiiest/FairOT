@@ -28,21 +28,91 @@ def greedy_fair_prototype_selection(f: Callable, S: np.ndarray, k: int, reg: flo
     return P
 
 def optimal_alpha(S_a: np.ndarray, b: np.ndarray, reg: float, tol=1e-8, max_iter=100) -> np.ndarray:
-
+    """
+    Compute optimal alpha using the closed-form KKT solution.
+    
+    Based on the coordinate-wise analysis:
+    - Interior points (0 < α_i < b_i): α_i = scaling_factor * exp(S_a[i]/λ)
+    - Boundary points (α_i = b_i): α_i = b_i
+    
+    Where scaling_factor = (1 - sum(b_i for boundary points)) / sum(exp(S_a[i]/λ) for interior points)
+    
+    Algorithm: Sort S_a points and iteratively find optimal partition between interior/boundary
+    """
     n = S_a.shape[0]
-    beta_low = np.min(S_a) - 100 * reg
-    beta_high = np.max(S_a) + 100 * reg
-    for _ in range(max_iter):
-        beta = (beta_low + beta_high) / 2
-        alpha = np.minimum(np.exp((S_a - beta) / reg - 1),b)
-        total = np.sum(alpha)
-        if abs(total - 1) < tol:
-            break
-        if total > 1:
-            beta_low = beta
+    
+    # Precompute exp(S_a[i]/λ) for efficiency
+    exp_S_scaled = np.exp(S_a / reg)
+    
+    # Sort indices by S_a values (descending order - highest similarity first)
+    sorted_indices = np.argsort(-S_a)
+    
+    best_alpha = None
+    best_objective = -np.inf
+    
+    # Try all possible partitions: first p points are interior, rest are boundary
+    for p in range(n + 1):  # p = 0, 1, ..., n
+        if p == 0:
+            # All points are boundary
+            if np.sum(b) > 0:
+                alpha = b / np.sum(b)
+            else:
+                alpha = np.zeros(n)
+        elif p == n:
+            # All points are interior (unconstrained softmax)
+            alpha = exp_S_scaled / np.sum(exp_S_scaled)
+            # Check if this violates any boundary constraint
+            if np.any(alpha > b + tol):
+                continue  # Invalid partition
         else:
-            beta_high = beta
-    return alpha
+            # Mixed case: first p points (by sorted order) are interior
+            interior_mask = np.zeros(n, dtype=bool)
+            interior_mask[sorted_indices[:p]] = True
+            boundary_mask = ~interior_mask
+            
+            # Check if this partition makes sense:
+            # Interior points should have potential to be < b_i
+            # (otherwise they should be boundary)
+            sum_boundary = np.sum(b[boundary_mask])
+            sum_exp_interior = np.sum(exp_S_scaled[interior_mask])
+            
+            if sum_boundary >= 1.0:
+                # Boundary points already sum to ≥ 1, set interior to 0
+                alpha = np.zeros(n)
+                alpha[boundary_mask] = b[boundary_mask] / sum_boundary
+            else:
+                # Normal case: compute scaling factor
+                scaling_factor = (1.0 - sum_boundary) / sum_exp_interior
+                alpha = np.zeros(n)
+                alpha[boundary_mask] = b[boundary_mask]
+                alpha[interior_mask] = scaling_factor * exp_S_scaled[interior_mask]
+                
+                # Verify that interior points are actually < b_i
+                if np.any(alpha[interior_mask] > b[interior_mask] + tol):
+                    continue  # Invalid partition
+        
+        # Check if this alpha satisfies all constraints
+        if (abs(np.sum(alpha) - 1.0) < tol and 
+            np.all(alpha >= -tol) and 
+            np.all(alpha <= b + tol)):
+            
+            # Compute objective value for this partition
+            objective = np.sum(S_a * alpha) + reg * np.sum(-alpha * np.log(alpha + 1e-12))
+            
+            if objective > best_objective:
+                best_objective = objective
+                best_alpha = alpha.copy()
+    
+    if best_alpha is None:
+        # Fallback: normalize b if no valid partition found
+        best_alpha = b / np.sum(b) if np.sum(b) > 0 else np.ones(n) / n
+    
+    # Final verification
+    assert np.abs(np.sum(best_alpha) - 1.0) < tol, f"Sum constraint violated: {np.sum(best_alpha)}"
+    assert np.all(best_alpha >= -tol), f"Non-negativity violated: min = {np.min(best_alpha)}"
+    assert np.all(best_alpha <= b + tol), f"Upper bound violated: max excess = {np.max(best_alpha - b)}"
+    
+    return best_alpha
 
 def approx_gain(P: List[int], gamma_P, v: int, S: np.ndarray, k: int, reg: float) -> float:
     n = S.shape[0]
@@ -245,5 +315,5 @@ def main():
     plt.show()
 
 if __name__ == "__main__":
-    #test_optimal_alpha_constraints()
-    main()
+    test_optimal_alpha_constraints()
+    #main()

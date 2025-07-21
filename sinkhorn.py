@@ -38,18 +38,24 @@ def pot_partial_extended(S_sub: np.ndarray, k: int, mu_P: np.ndarray,
     # Solve OT with extended matrices
     gamma_extended = ot.sinkhorn(mu_P_ext, mu_T_ext, C_extended, reg,numItermax=4000)
 
-    print(f"Extended similarity matrix shape: {S_extended.shape}")
-    print(f"Dummy row similarity: {S_dummy_row.flatten()[0]:.3f} (should be {beta - epsilon_min})")
-    print(f"Original similarities: [{np.min(S_extended_original):.3f}, {np.max(S_extended_original):.3f}]")
-    print(f"Beta: {beta:.3f}, Epsilon: {epsilon_min}")
-    print(f"Dummy mass: {mu_dummy[0]:.6f}")
+    #print(f"Extended similarity matrix shape: {S_extended.shape}")
+    #print(f"Dummy row similarity: {S_dummy_row.flatten()[0]:.3f} (should be {beta - epsilon_min})")
+    #print(f"Original similarities: [{np.min(S_extended_original):.3f}, {np.max(S_extended_original):.3f}]")
+    #print(f"Beta: {beta:.3f}, Epsilon: {epsilon_min}")
+    #print(f"Dummy mass: {mu_dummy[0]:.6f}")
+
+    #print("\n2. POT Extended Partial OT:")
+    #print(f"Shape: {gamma_extended.shape}")
+    #print(f"Total mass transported: {np.sum(gamma_extended):.6f}")
+    #print(f"Row sums (should= mu_P): {np.sum(gamma_extended, axis=1)}")
+    #print(f"Column sums: {np.sum(gamma_extended, axis=0)}")
 
     # Return only the non-dummy part (first m rows)
-    #gamma_non_dummy = m*gamma_extended[:m, :]
-    gamma_non_dummy = gamma_extended[:m, :]
+    gamma_non_dummy = m*gamma_extended[:m, :]
+    #gamma_non_dummy = gamma_extended[:m, :]
     # Compute the objective value with non-extended S and gamma_non_dummy (first m rows)
     obj_value = np.sum(S_sub * gamma_non_dummy)
-    print(f"Objective value (non-extended S, gamma_extended): {obj_value:.6f}")
+    #print(f"Objective value (non-extended S, gamma_extended): {obj_value:.6f}")
 
     # Compute the entropic regularization term
     mask = gamma_non_dummy > 0
@@ -61,19 +67,36 @@ def pot_partial_extended(S_sub: np.ndarray, k: int, mu_P: np.ndarray,
 def pot_partial_library(S_sub: np.ndarray, k: int, mu_P: np.ndarray, reg: float) -> np.ndarray:
 
     m, n = S_sub.shape
-    
     # Cost matrix is negative similarity
     C = -S_sub
-    
     # Target marginal for partial transport
     mu_T = k * np.ones(n) / n
     mu_P = np.ones(m)
+    # Print L1 norms for diagnostics
+    l1_mu_P = np.sum(np.abs(mu_P))
+    l1_mu_T = np.sum(np.abs(mu_T))
+    #print(f"L1 norm of mu_P: {l1_mu_P:.6f}")
+    #print(f"L1 norm of mu_T: {l1_mu_T:.6f}")
+    #print(f"Min of L1 norms: {min(l1_mu_P, l1_mu_T):.6f}")
     # Mass to transport (partial transport parameter)
-    mass_to_transport = m
+    mass_to_transport = min(m,k)
+    if(mass_to_transport > min(l1_mu_P, l1_mu_T)):
+        print("Warning: mass to transport exceeds min(|a|_1, |b|_1). This may lead to unexpected results.")
+        mass_to_transport = min(l1_mu_P, l1_mu_T)
+    #print(f" mass to transport is {mass_to_transport} while min(|a|_1, |b|_1) is {min(l1_mu_P, l1_mu_T)}")
+
+    #print("Min of marginals: ", np.min((mu_P), (mu_T)))
     # Use POT's partial optimal transport
     gamma_star = ot.partial.entropic_partial_wasserstein(
         mu_P, mu_T, C, reg, numItermax=4000, m= mass_to_transport
     )
+
+    #print("\n2. POT Library Partial OT:")
+    #print(f"Shape: {gamma_star.shape}")
+    #print(f"Total mass transported: {np.sum(gamma_star):.6f}")
+    #print(f"Row sums (should= mu_P): {np.sum(gamma_star, axis=1)}")
+    #print(f"Column sums: {np.sum(gamma_star, axis=0)}")
+    
     obj_value = np.sum(S_sub * gamma_star)- reg*np.sum(gamma_star * np.log(gamma_star + 1e-10))  # Avoid log(0)
 
     return gamma_star, obj_value
@@ -83,29 +106,29 @@ def compare_partial_ot_methods(S_sub: np.ndarray, k: int, mu_P: np.ndarray, reg:
     """
     Compare different partial OT implementations.
     """
-    print("=" * 60)
-    print("PARTIAL OPTIMAL TRANSPORT COMPARISON")
-    print("=" * 60)
+    #print("=" * 60)
+    #print("PARTIAL OPTIMAL TRANSPORT COMPARISON")
+    #print("=" * 60)
     
     # Method 1: Extended matrix approach
-    print("\n1. Extended Matrix Approach:")
+    #print("\n1. Extended Matrix Approach:")
     gamma_extended, obj_extended = pot_partial_extended(S_sub, k, mu_P, reg)
-    print(f"Shape: {gamma_extended.shape}")
-    print(f"Total mass transported: {np.sum(gamma_extended):.6f}")
-    print(f"Row sums (should ≤ mu_P): {np.sum(gamma_extended, axis=1)}")
-    print(f"Column sums: {np.sum(gamma_extended, axis=0)}")
+    #print(f"Shape: {gamma_extended.shape}")
+    #print(f"Total mass transported: {np.sum(gamma_extended):.6f}")
+    #print(f"Row sums (should ≤ mu_P): {np.sum(gamma_extended, axis=1)}")
+    #print(f"Column sums: {np.sum(gamma_extended, axis=0)}")
     
     # Method 2: POT library partial OT
-    print("\n2. POT Library Partial OT:")
+    #print("\n2. POT Library Partial OT:")
     gamma_library, obj_library = pot_partial_library(S_sub, k, mu_P, reg)
-    print(f"Shape: {gamma_library.shape}")
-    print(f"Total mass transported: {np.sum(gamma_library):.6f}")
-    print(f"Row sums (should= mu_P): {np.sum(gamma_library, axis=1)}")
-    print(f"Column sums: {np.sum(gamma_library, axis=0)}")
+    #print(f"Shape: {gamma_library.shape}")
+    #print(f"Total mass transported: {np.sum(gamma_library):.6f}")
+    #print(f"Row sums (should= mu_P): {np.sum(gamma_library, axis=1)}")
+    #print(f"Column sums: {np.sum(gamma_library, axis=0)}")
     
 
     # Compare solutions
-    print("\n4. Solution Comparison:")
+    #print("\n4. Solution Comparison:")
     if gamma_extended.shape == gamma_library.shape:
         diff_ext_lib = np.linalg.norm(gamma_extended - gamma_library, 'fro')
         diff_ext_lib = diff_ext_lib/(np.linalg.norm(gamma_library, 'fro') * 1.0)
