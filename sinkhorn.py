@@ -1,6 +1,6 @@
 import numpy as np
 import ot  # POT library
-
+import time
 
 def pot_partial_extended(S_sub: np.ndarray, k: int, mu_P: np.ndarray,
                         reg: float, epsilon: float = 1.0,
@@ -36,7 +36,7 @@ def pot_partial_extended(S_sub: np.ndarray, k: int, mu_P: np.ndarray,
     mu_T_ext = np.ones(n) / n
 
     # Solve OT with extended matrices
-    gamma_extended = ot.sinkhorn(mu_P_ext, mu_T_ext, C_extended, reg,numItermax=4000)
+    gamma_extended = ot.sinkhorn(mu_P_ext, mu_T_ext, C_extended, reg,numItermax=100)
 
     #print(f"Extended similarity matrix shape: {S_extended.shape}")
     #print(f"Dummy row similarity: {S_dummy_row.flatten()[0]:.3f} (should be {beta - epsilon_min})")
@@ -88,7 +88,7 @@ def pot_partial_library(S_sub: np.ndarray, k: int, mu_P: np.ndarray, reg: float)
     #print("Min of marginals: ", np.min((mu_P), (mu_T)))
     # Use POT's partial optimal transport
     gamma_star = ot.partial.entropic_partial_wasserstein(
-        mu_P, mu_T, C, reg, numItermax=4000, m= mass_to_transport
+        mu_P, mu_T, C, reg, numItermax=100, m= mass_to_transport
     )
 
     #print("\n2. POT Library Partial OT:")

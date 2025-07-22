@@ -2,6 +2,7 @@ import numpy as np
 from typing import Callable, List, Set
 from FairOT.sinkhorn import pot_partial_extended, pot_partial_library
 import matplotlib.pyplot as plt
+import time
 
 def greedy_fair_prototype_selection(f: Callable, S: np.ndarray, k: int, reg: float) -> List[int]:
     """
@@ -35,6 +36,37 @@ def greedy_fair_prototype_selection(f: Callable, S: np.ndarray, k: int, reg: flo
                 best_v = v
         P.append(best_v)
     return P
+
+def optimal_alpha_vectorized(sorted_S_a: np.ndarray, sorted_indices: np.ndarray, b: np.ndarray, reg: float, tol=1e-8) -> np.ndarray:
+    """
+    Compute optimal alpha using a vectorized approach for all possible partitions.
+    Args:
+        S_a: Similarity vector for candidate a (shape n,)
+        b: Upper bound vector (shape n,)
+        reg: Entropic regularization parameter
+        tol: Tolerance for numerical checks
+    Returns:
+        alpha: Optimal solution (shape n,)
+    """
+    n = sorted_S_a.shape[0]
+    # Sort S_a in descending order and get sorted indices
+    sorted_b = b[sorted_indices]
+    # Find the partition index p
+    cumulative_sum = np.cumsum(sorted_b)
+    p = np.searchsorted(cumulative_sum, 1, side='right')  # Find the index where sum(b[:p]) <= 1
+
+    # Compute scaling factor for interior points
+    sum_boundary = np.sum(sorted_b[p:])
+    sum_exp_interior = np.sum(np.exp(sorted_S_a[:p] / reg))
+    scaling_factor = (1.0 - sum_boundary) / sum_exp_interior if sum_boundary < 1.0 else 0
+
+    # Compute alpha values
+    alpha = np.zeros(n)
+    alpha[sorted_indices[:p]] = scaling_factor * np.exp(sorted_S_a[:p] / reg)
+    alpha[sorted_indices[p:]] = sorted_b[p:]
+
+    return alpha
+
 
 def optimal_alpha(S_a: np.ndarray, b: np.ndarray, reg: float, tol=1e-8, max_iter=100) -> np.ndarray:
     """
@@ -124,7 +156,7 @@ def optimal_alpha(S_a: np.ndarray, b: np.ndarray, reg: float, tol=1e-8, max_iter
     return best_alpha
 
 
-def approx_gain(P: List[int], gamma_P, v: int, S: np.ndarray, k: int, reg: float) -> float:
+def approx_gain(P: List[int], gamma_P, v: int, S: np.ndarray, S_a: np.ndarray, sorted_indices: np.ndarray ,b:np.ndarray, k: int, reg: float) -> float:
     """
     Approximate gain function for greedy selection using feasible extension.
     Args:
@@ -148,13 +180,10 @@ def approx_gain(P: List[int], gamma_P, v: int, S: np.ndarray, k: int, reg: float
     else:
         m = len(P)
         S_P = S[np.ix_(P, range(n))]
-        S_a = S[v, :].reshape(1, n)
-        col_sums = np.sum(gamma_P, axis=0)
-        mu_T = k * np.ones(n) / n
-        b = mu_T - col_sums
-        b = np.clip(b, 0, None)  # ensure non-negative upper bounds
+ # ensure non-negative upper bounds
         # Use closed-form for optimal alpha
-        alpha = optimal_alpha(S_a.flatten(), b, reg)
+        #alpha = np.zeros(n)
+        alpha = optimal_alpha_vectorized(S_a.flatten(), sorted_indices, b, reg)
         gamma_tilde = np.vstack([gamma_P, alpha.reshape(1, n)])
         obj = np.sum(S_P * gamma_P) + np.sum(S_a * alpha)
         mask = gamma_tilde > 0
@@ -186,7 +215,7 @@ def test_optimal_alpha_constraints():
     col_sums = np.sum(gamma_P_star, axis=0)
     b = mu_T - col_sums
     b = np.clip(b, 0, None)
-    alpha = optimal_alpha(S_a, b, reg)
+    alpha = optimal_alpha(S_a, sorted_indices,      b, reg)
     print("alpha:", alpha)
     print("sum(alpha):", np.sum(alpha))
     print("min(alpha):", np.min(alpha))
@@ -370,7 +399,7 @@ def main():
         best_gain = -np.inf
         best_v = None
         for v in set(range(n)) - set(P_approx):
-            approx = approx_gain(P_approx, gamma_P, v, S, k, reg)
+            approx = approx_gain(P_approx, gamma_P, v, k, reg)
             if approx > best_gain:
                 best_gain = approx
                 best_v = v
@@ -673,8 +702,8 @@ def main_synthetic():
 
 def main_synthetic_new():
     np.random.seed(42)  # For reproducibility
-    n = 100
-    k = 10
+    n = 2000
+    k = 50
     reg_values = [0.01, 0.05, 0.1, 0.5]  # Multiple regularization values
     
     # Generate random 2D points
@@ -694,7 +723,7 @@ def main_synthetic_new():
         print(f"\n{'='*50}")
         print(f"Running experiments with reg = {reg}")
         print(f"{'='*50}")
-        
+        '''
         # --- Approx-gain greedy (pot_partial_extended) ---
         print("Running approx-gain greedy (extended)...")
         P_approx = []
@@ -756,36 +785,73 @@ def main_synthetic_new():
         mu_P = np.ones(len(P_actual)) / len(P_actual)
         _, obj_P = pot_partial_extended(S_P, k, mu_P, reg)
         obj_values_actual.append(obj_P)
-
+        '''
         # --- Approx-gain greedy (pot_partial_library) ---
         print("Running approx-gain greedy (library)...")
         P_approx_lib = []
         obj_values_approx_lib = []
         gamma_P = None
         obj_P = 0.0
+        mu_T = k * np.ones(n) / n
+
+        sorted_indices_all = np.argsort(-S, axis=1)  # Sort indices for all rows of S
+        sorted_S_all = np.take_along_axis(S, sorted_indices_all, axis=1)  # Sort S along rows
+        print("All of S is sorted")
         for step in range(k):
+            start_time = time.time()
+
             if len(P_approx_lib) == 0:
                 gamma_P = None
                 obj_P = 0.0
             else:
                 S_P = S[np.ix_(P_approx_lib, range(n))]
                 mu_P = np.ones(len(P_approx_lib)) / len(P_approx_lib)
+                print("POT library called \n")
                 gamma_P, obj_P = pot_partial_library(S_P, k, mu_P, reg)
+                print(f"Objective val for current proto at step {step}", obj_P)
             obj_values_approx_lib.append(obj_P)
             best_gain = -np.inf
             best_v = None
-            for v in set(range(n)) - set(P_approx_lib):
-                approx = approx_gain(P_approx_lib, gamma_P, v, S, k, reg)
-                if approx > best_gain:
-                    best_gain = approx
-                    best_v = v
+            if gamma_P is None:
+                col_sums = np.zeros(n)  # Initialize col_sums to zeros if gamma_P is None
+            else:
+                col_sums = np.sum(gamma_P, axis=0)
+            
+
+            #col_sums = np.sum(gamma_P, axis=0)
+            b = mu_T - col_sums
+            b = np.clip(b, 0, None)
+            
+
+            # Optimize the loop over candidates
+            candidates = np.array(list(set(range(n)) - set(P_approx_lib)))  # Convert to NumPy array for faster indexing
+            sorted_indices_candidates = sorted_indices_all[candidates]  # Precompute sorted indices for candidates
+            sorted_S_candidates = sorted_S_all[candidates]  # Precompute sorted similarity vectors for candidates
+            #TODO: focus code
+            # Vectorized computation of approximate gains for all candidates
+            gains = np.array([
+                approx_gain(P_approx_lib, gamma_P, v, S, sorted_S_candidates[i], sorted_indices_candidates[i], b, k, reg)
+                for i, v in enumerate(candidates)
+            ])
+
+            # Select the best candidate
+            best_gain_idx =  np.argmax(gains)
+            best_gain = gains[best_gain_idx]
+            best_v = candidates[best_gain_idx]
+
             P_approx_lib.append(best_v)
-        # Final objective
+            end_time = time.time()
+            print(f"Step {step+1}/{k}: Selected {best_v} in {end_time - start_time:.4f} seconds")
+
+            # Final objective
+        
         S_P = S[np.ix_(P_approx_lib, range(n))]
         mu_P = np.ones(len(P_approx_lib)) / len(P_approx_lib)
         _, obj_P = pot_partial_library(S_P, k, mu_P, reg)
         obj_values_approx_lib.append(obj_P)
 
+        '''
+ 
         # --- Actual-gain greedy (pot_partial_library) ---
         print("Running actual-gain greedy (library)...")
         P_actual_lib = []
@@ -819,16 +885,17 @@ def main_synthetic_new():
         _, obj_P = pot_partial_library(S_P, k, mu_P, reg)
         obj_values_actual_lib.append(obj_P)
         
+        '''
         # Store results for this regularization value
         all_results[reg] = {
-            'obj_values_approx': obj_values_approx,
-            'obj_values_actual': obj_values_actual,
+            #'obj_values_approx': obj_values_approx,
+            #'obj_values_actual': obj_values_actual,
             'obj_values_approx_lib': obj_values_approx_lib,
-            'obj_values_actual_lib': obj_values_actual_lib,
-            'P_approx': P_approx,
-            'P_actual': P_actual,
+           # 'obj_values_actual_lib': obj_values_actual_lib,
+            #'P_approx': P_approx,
+            #'P_actual': P_actual,
             'P_approx_lib': P_approx_lib,
-            'P_actual_lib': P_actual_lib
+            #'P_actual_lib': P_actual_lib
         }
 
     # --- Plot all results ---
@@ -846,10 +913,10 @@ def main_synthetic_new():
         ax = axes[i]
         results = all_results[reg]
         
-        ax.plot(steps, results['obj_values_approx'], marker='o', label='Approx-gain (extended)', linewidth=2)
-        ax.plot(steps, results['obj_values_actual'], marker='s', color='orange', label='Actual-gain (extended)', linewidth=2)
+        #ax.plot(steps, results['obj_values_approx'], marker='o', label='Approx-gain (extended)', linewidth=2)
+       # ax.plot(steps, results['obj_values_actual'], marker='s', color='orange', label='Actual-gain (extended)', linewidth=2)
         ax.plot(steps, results['obj_values_approx_lib'], marker='^', color='green', label='Approx-gain (library)', linewidth=2)
-        ax.plot(steps, results['obj_values_actual_lib'], marker='d', color='red', label='Actual-gain (library)', linewidth=2)
+        #ax.plot(steps, results['obj_values_actual_lib'], marker='d', color='red', label='Actual-gain (library)', linewidth=2)
         
         ax.set_title(f'Objective value: reg = {reg}\n(Synthetic Gaussian data)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Greedy step (k)')
@@ -874,16 +941,16 @@ def main_synthetic_new():
         ax = axes[i]
         results = all_results[reg]
         
-        inc_approx = np.diff(results['obj_values_approx'])
-        inc_actual = np.diff(results['obj_values_actual'])
+        #inc_approx = np.diff(results['obj_values_approx'])
+        #inc_actual = np.diff(results['obj_values_actual'])
         inc_approx_lib = np.diff(results['obj_values_approx_lib'])
         inc_actual_lib = np.diff(results['obj_values_actual_lib'])
         
         steps_inc = range(1, k+1)
-        ax.plot(steps_inc, inc_approx, marker='o', label='Approx-gain (extended)', linewidth=2)
-        ax.plot(steps_inc, inc_actual, marker='s', color='orange', label='Actual-gain (extended)', linewidth=2)
+        #ax.plot(steps_inc, inc_approx, marker='o', label='Approx-gain (extended)', linewidth=2)
+        #ax.plot(steps_inc, inc_actual, marker='s', color='orange', label='Actual-gain (extended)', linewidth=2)
         ax.plot(steps_inc, inc_approx_lib, marker='^', color='green', label='Approx-gain (library)', linewidth=2)
-        ax.plot(steps_inc, inc_actual_lib, marker='d', color='red', label='Actual-gain (library)', linewidth=2)
+        #ax.plot(steps_inc, inc_actual_lib, marker='d', color='red', label='Actual-gain (library)', linewidth=2)
         
         ax.set_title(f'Incremental gains: reg = {reg}', fontsize=12, fontweight='bold')
         ax.set_xlabel('Greedy step (k)')
@@ -900,16 +967,16 @@ def main_synthetic_new():
     # Summary comparison: final objective values
     plt.figure(figsize=(12, 8))
     
-    final_obj_approx = [all_results[reg]['obj_values_approx'][-1] for reg in reg_values]
-    final_obj_actual = [all_results[reg]['obj_values_actual'][-1] for reg in reg_values]
+    #final_obj_approx = [all_results[reg]['obj_values_approx'][-1] for reg in reg_values]
+    #final_obj_actual = [all_results[reg]['obj_values_actual'][-1] for reg in reg_values]
     final_obj_approx_lib = [all_results[reg]['obj_values_approx_lib'][-1] for reg in reg_values]
     final_obj_actual_lib = [all_results[reg]['obj_values_actual_lib'][-1] for reg in reg_values]
     
     x = np.arange(len(reg_values))
     width = 0.2
     
-    plt.bar(x - 1.5*width, final_obj_approx, width, label='Approx-gain (extended)', alpha=0.8)
-    plt.bar(x - 0.5*width, final_obj_actual, width, label='Actual-gain (extended)', alpha=0.8)
+    #plt.bar(x - 1.5*width, final_obj_approx, width, label='Approx-gain (extended)', alpha=0.8)
+    #plt.bar(x - 0.5*width, final_obj_actual, width, label='Actual-gain (extended)', alpha=0.8)
     plt.bar(x + 0.5*width, final_obj_approx_lib, width, label='Approx-gain (library)', alpha=0.8)
     plt.bar(x + 1.5*width, final_obj_actual_lib, width, label='Actual-gain (library)', alpha=0.8)
     
@@ -930,11 +997,10 @@ def main_synthetic_new():
     for reg in reg_values:
         results = all_results[reg]
         print(f"reg={reg}:")
-        print(f"  Approx-gain (extended): {results['obj_values_approx'][-1]:.4f}")
-        print(f"  Actual-gain (extended): {results['obj_values_actual'][-1]:.4f}")
+        #print(f"  Approx-gain (extended): {results['obj_values_approx'][-1]:.4f}")
+        #print(f"  Actual-gain (extended): {results['obj_values_actual'][-1]:.4f}")
         print(f"  Approx-gain (library):  {results['obj_values_approx_lib'][-1]:.4f}")
         print(f"  Actual-gain (library):  {results['obj_values_actual_lib'][-1]:.4f}")
-
 if __name__ == "__main__":
     #test_optimal_alpha_constraints()
     main_synthetic_new()
