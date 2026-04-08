@@ -171,8 +171,8 @@ def main():
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
         # Change last layer to LoRA
-        training_args.last_layers = [
-            name + '.lora_B' for name in training_args.last_layers]
+        # training_args.last_layers = [
+        #     name + '.lora_B' for name in training_args.last_layers]
 
     model_params = sum(p.numel()
                        for p in model.parameters() if p.requires_grad)

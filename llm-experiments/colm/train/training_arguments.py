@@ -204,14 +204,17 @@ class TrainingArguments(TA):
             )
         },
     )
-    last_layers: Optional[str] = field(
-        default="v_proj",
+    last_layers_A: Optional[list] = field(
+        default=None,
         metadata={
-            "help": (
-                "Name of last layers. "
-            ),
-            "choices": ["q_proj", "k_proj", "v_proj", "o_proj", "fc1", "fc2", "qkv_proj", "qkvo_proj", "fc"],
-        },
+            "help": "Layer names for lora_A parameters, auto-populated from last_layers"
+        }
+    )
+    last_layers_B: Optional[list] = field(
+        default=None, 
+        metadata={
+            "help": "Layer names for lora_B parameters, auto-populated from last_layers"
+        }
     )
     wandb_entity: Optional[str] = field(
         default="hsgser",
@@ -305,16 +308,21 @@ class TrainingArguments(TA):
             list_last_layer = ['q_proj', 'k_proj', 'v_proj']
         elif self.last_layers == "qkvo_proj":
             list_last_layer = ['q_proj', 'k_proj', 'v_proj', 'o_proj']
-        elif self.last_layers == "qkvo_proj":
+        elif self.last_layers == "fc":
             list_last_layer = ['fc1', 'fc2']
         else:
             list_last_layer = [self.last_layers]
-            
-        self.last_layers = []
-        
+
+        base_layers = []
         for last_layer in list_last_layer:
-            if 'fc' in self.last_layers:
-                self.last_layers.append(f'{self.last_layer_index}.mlp.{last_layer}')
+            if 'fc' in last_layer:
+                base_layers.append(f'{self.last_layer_index}.mlp.{last_layer}')
             else:
-                self.last_layers.append(f'{self.last_layer_index}.self_attn.{last_layer}')
+                base_layers.append(f'{self.last_layer_index}.self_attn.{last_layer}')
+
+        self.last_layers_B = [name + '.lora_B' for name in base_layers]
+        self.last_layers_A = [name + '.lora_A' for name in base_layers]
+
+        self.last_layers = self.last_layers_B
+
         super().__post_init__()
